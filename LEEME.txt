@@ -1,10 +1,11 @@
 PASS BOX WEB (para iPhone y cualquier navegador)
 
 1. Abre index.html con el Bloc de notas y cambia PEGA_AQUI_TU_APP_KEY por tu App key de Dropbox.
+1b. Abre extras.js y cambia TU NOMBRE AQUÍ por tu nombre (línea 2).
 2. Sube TODOS los archivos de esta carpeta a un repositorio de GitHub y activa GitHub Pages
    (Settings > Pages > Deploy from a branch > main > / (root)).
 3. En el iPhone, abre la dirección en Safari > Compartir > "Añadir a pantalla de inicio".
    Usa SIEMPRE ese icono (Safari y el icono guardan datos por separado).
 
-Para publicar una versión nueva, cambia 'passbox-v1' por 'passbox-v2' en sw.js.
+Para publicar una versión nueva, cambia el número de versión de sw.js (passbox-v2 por passbox-v3) en sw.js.
 La librería Argon2 incluida es hash-wasm (licencia MIT, ver LICENSE-hash-wasm.txt).

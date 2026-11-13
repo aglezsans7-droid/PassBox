@@ -47,7 +47,7 @@ button:disabled{opacity:.5}
 <script src="argon2.umd.min.js"></script>
 <script>
 // PEGA AQUÍ la «App key» de tu app de Dropbox (la misma que usas en la app de Windows/Android).
-const KEY = 'rrxvd3qsxyeefa9';
+const KEY = 'PEGA_AQUI_TU_APP_KEY';
 
 const $ = s => document.querySelector(s), E = new TextEncoder(), D = new TextDecoder();
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -167,7 +167,8 @@ const vEdit = () => { const e = S.sel ? find(S.sel) : { site: '', username: '', 
 <label>Contraseña</label><div style="display:flex;gap:8px"><input id="f_pw" type="password" value="${esc(e.password)}" autocapitalize="off" autocorrect="off" style="font-family:ui-monospace,Menlo,Consolas,monospace"><button class="s" data-a="eye">Ver</button><button class="s" data-a="gen">Generar</button></div>
 <label>Notas</label><textarea id="f_notes" rows="4">${esc(e.notes)}</textarea>
 <button style="width:100%;margin-top:22px" data-a="save">${S.sel ? 'Guardar cambios' : 'Guardar entrada'}</button>`; };
-const render = () => { $('#app').innerHTML = { unlock: vUnlock, list: vList, edit: vEdit }[S.v](); bump(); };
+const V = { unlock: vUnlock, list: vList, edit: vEdit };
+const render = () => { $('#app').innerHTML = V[S.v](); bump(); };
 
 // ---- Acciones ----
 function lock() { if (S.noLock || !S.pw) return; S.vault = S.pw = null; S.v = 'unlock'; S.sel = null; S.q = ''; render(); }
@@ -243,5 +244,6 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) lock(
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 render();
 </script>
+<script src="extras.js"></script>
 </body>
 </html>
