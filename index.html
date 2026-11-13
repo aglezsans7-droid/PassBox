@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Pass Box</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Pass Box">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0d1a21">
+<style>
+:root{--bg:#e8edf0;--sf:#f8fafb;--ln:#d3dce1;--mu:#51656f;--pr:#0b5563;--op:#fff;--tx:#11242d;--er:#b3261e;color-scheme:light dark}
+@media(prefers-color-scheme:dark){:root{--bg:#0d1a21;--sf:#15262f;--ln:#263a44;--mu:#8fa3ad;--pr:#c8a24a;--op:#1b1604;--tx:#e8eef1;--er:#f2b8b5}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:620px;margin:0 auto;padding:calc(env(safe-area-inset-top) + 16px) 16px calc(env(safe-area-inset-bottom) + 100px)}
+h1{font-size:26px;letter-spacing:-.6px;margin:0}
+.mu{color:var(--mu);font-size:14px}
+.card{background:var(--sf);border:1px solid var(--ln);border-radius:20px;overflow:hidden}
+.row{display:flex;align-items:center;gap:10px;padding:10px 12px;border-top:1px solid var(--ln)}
+.row:first-child{border-top:0}
+input,textarea{width:100%;font:inherit;color:inherit;background:var(--sf);border:1px solid var(--ln);border-radius:14px;padding:13px 14px}
+input:focus,textarea:focus{outline:2px solid var(--pr)}
+label{display:block;font-size:13px;color:var(--mu);margin:14px 0 4px}
+button,a.btn{font:inherit;cursor:pointer;border:0;border-radius:14px;padding:13px 16px;background:var(--pr);color:var(--op);font-weight:700}
+button.t{background:transparent;color:var(--tx);padding:8px 10px}
+button.s,a.btn{background:var(--ln);color:var(--tx)}
+a.btn{display:block;text-align:center;text-decoration:none}
+button:disabled{opacity:.5}
+.tag{width:40px;height:46px;border-radius:10px;color:#fff;font-weight:800;font-size:19px;display:grid;place-items:center;flex:none}
+.grow{flex:1;min-width:0}.grow b,.grow span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fab{position:fixed;right:20px;bottom:calc(env(safe-area-inset-bottom) + 20px);box-shadow:0 6px 20px #0006;border-radius:18px;padding:15px 20px}
+#toast{position:fixed;left:16px;right:16px;bottom:calc(env(safe-area-inset-bottom) + 92px);max-width:588px;margin:auto;background:var(--tx);color:var(--bg);padding:12px 16px;border-radius:14px;opacity:0;pointer-events:none;transition:opacity .2s}
+#toast.on{opacity:1}
+.bar{position:fixed;top:0;left:0;height:3px;background:var(--pr);animation:b 1s infinite alternate}@keyframes b{from{width:10%}to{width:100%}}
+.ov{position:fixed;inset:0;background:#0009;display:grid;place-items:center;padding:16px}
+.ov .card{padding:20px;max-width:420px;width:100%}
+.err{color:var(--er);margin-top:10px}
+</style>
+</head>
+<body>
+<main id="app"></main>
+<div id="toast"></div>
+<script src="argon2.umd.min.js"></script>
+<script>
+// PEGA AQUÍ la «App key» de tu app de Dropbox (la misma que usas en la app de Windows/Android).
+const KEY = 'PEGA_AQUI_TU_APP_KEY';
+
+const $ = s => document.querySelector(s), E = new TextEncoder(), D = new TextDecoder();
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const b64 = u => { let s = ''; for (let i = 0; i < u.length; i += 8192) s += String.fromCharCode(...u.subarray(i, i + 8192)); return btoa(s); };
+const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+const b64u = u => b64(u).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const cat = (a, b) => { const r = new Uint8Array(a.length + b.length); r.set(a); r.set(b, a.length); return r; };
+const rnd = n => crypto.getRandomValues(new Uint8Array(n));
+const hex = u => [...u].map(x => x.toString(16).padStart(2, '0')).join('');
+const P = { m: 19456, t: 2, p: 1 };
+const conn = () => !!localStorage.pb_rt;
+
+// ---- Cifrado: mismo formato que la app (Argon2id + AES-256-GCM) ----
+const deriveKey = async (pw, salt, m, t, p) => crypto.subtle.importKey('raw',
+  await hashwasm.argon2id({ password: pw, salt, parallelism: p, iterations: t, memorySize: m, hashLength: 32, outputType: 'binary' }),
+  'AES-GCM', false, ['encrypt', 'decrypt']);
+const aad = (m, t, p) => E.encode(`v1|argon2id|${m}|${t}|${p}`);
+
+async function seal(vault, pw) {
+  const salt = rnd(16), iv = rnd(12), k = await deriveKey(pw, salt, P.m, P.t, P.p);
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: aad(P.m, P.t, P.p), tagLength: 128 }, k, E.encode(JSON.stringify(vault))));
+  const n = ct.length - 16;
+  return JSON.stringify({ v: 1, kdf: 'argon2id', m: P.m, t: P.t, p: P.p, salt: b64(salt), nonce: b64(iv), data: b64(ct.slice(0, n)), mac: b64(ct.slice(n)) });
+}
+async function open(text, pw) {
+  const bad = () => Object.assign(new Error('bad'), { bad: true });
+  let f; try { f = JSON.parse(text); } catch { throw bad(); }
+  if (f.v !== 1 || f.kdf !== 'argon2id' || f.m < 8192 || f.m > 262144 || f.t < 1 || f.t > 10 || f.p < 1 || f.p > 4) throw bad();
+  const k = await deriveKey(pw, unb64(f.salt), f.m, f.t, f.p);
+  try {
+    const clear = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(f.nonce), additionalData: aad(f.m, f.t, f.p), tagLength: 128 }, k, cat(unb64(f.data), unb64(f.mac)));
+    return JSON.parse(D.decode(clear));
+  } catch { throw bad(); }
+}
+const local = async (vault, pw) => { localStorage.pb_vault = await seal(vault, pw); };
+const merge = (a, b) => { for (const o of b.entries) { const i = a.entries.findIndex(e => e.id === o.id); if (i < 0) a.entries.push(o); else if (o.modified > a.entries[i].modified) a.entries[i] = o; } };
+
+// ---- Dropbox (PKCE, copiando el código a mano, igual que la app) ----
+let tok = null, exp = 0;
+const dbTok = async b => {
+  const r = await fetch('https://api.dropboxapi.com/oauth2/token', { method: 'POST', body: new URLSearchParams({ ...b, client_id: KEY }) });
+  if (!r.ok) throw Error('Dropbox rechazó la conexión (' + r.status + ').');
+  const j = await r.json(); tok = j.access_token; exp = Date.now() + (j.expires_in - 60) * 1e3; return j;
+};
+const acc = async () => {
+  if (tok && Date.now() < exp) return tok;
+  if (!localStorage.pb_rt) throw Error('Dropbox no está conectado.');
+  await dbTok({ grant_type: 'refresh_token', refresh_token: localStorage.pb_rt }); return tok;
+};
+const dbDown = async () => {
+  const r = await fetch('https://content.dropboxapi.com/2/files/download', { method: 'POST', headers: { Authorization: 'Bearer ' + await acc(), 'Dropbox-API-Arg': JSON.stringify({ path: '/vault.enc' }) } });
+  const text = await r.text();
+  if (r.status === 409 && text.includes('not_found')) return null;
+  if (!r.ok) throw Error('Error al descargar de Dropbox (' + r.status + ').');
+  let rev; try { rev = JSON.parse(r.headers.get('dropbox-api-result')).rev; } catch {}
+  if (!rev) {
+    const m = await fetch('https://api.dropboxapi.com/2/files/get_metadata', { method: 'POST', headers: { Authorization: 'Bearer ' + await acc(), 'Content-Type': 'application/json' }, body: JSON.stringify({ path: '/vault.enc' }) });
+    rev = (await m.json()).rev;
+  }
+  return { text, rev };
+};
+const dbUp = async (text, rev) => {
+  const r = await fetch('https://content.dropboxapi.com/2/files/upload', { method: 'POST', headers: { Authorization: 'Bearer ' + await acc(), 'Content-Type': 'application/octet-stream', 'Dropbox-API-Arg': JSON.stringify({ path: '/vault.enc', mode: rev ? { '.tag': 'update', update: rev } : { '.tag': 'add' }, autorename: false, mute: true }) }, body: text });
+  if (r.status === 409) throw Object.assign(Error('conflict'), { conflict: true });
+  if (!r.ok) throw Error('Error al subir a Dropbox (' + r.status + ').');
+};
+async function sync(vault, pw) {
+  for (let i = 0; i < 3; i++) {
+    const r = await dbDown();
+    if (r) merge(vault, await open(r.text, pw));
+    const text = await seal(vault, pw);
+    try { await dbUp(text, r && r.rev); localStorage.pb_vault = text; return; }
+    catch (e) { if (!e.conflict) throw e; }
+  }
+  throw Error('No se pudo sincronizar tras varios intentos.');
+}
+const why = e => e.bad ? 'el baúl de Dropbox usa otra contraseña maestra.' : e.message;
+
+// ---- Estado y pantallas ----
+const S = { v: 'unlock', vault: null, pw: null, q: '', sel: null, busy: false, err: '', noLock: false };
+const COL = ['#1f6f8b', '#8f3b3b', '#5b7f3a', '#9c5415', '#4a4e8f', '#2f7f6b', '#7a4b7a', '#55616b'];
+const col = s => { let h = 0; s = s.trim().toLowerCase(); for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) & 0x7fffffff; return COL[h % 8]; };
+const find = id => S.vault.entries.find(e => e.id === id);
+let tt, ct, idle;
+const toast = m => { const t = $('#toast'); t.textContent = m; t.className = 'on'; clearTimeout(tt); tt = setTimeout(() => t.className = '', 4000); };
+const bump = () => { clearTimeout(idle); if (S.pw) idle = setTimeout(lock, 12e4); };
+
+const vUnlock = () => { const c = !localStorage.pb_vault; return `
+<div style="text-align:center;padding-top:5vh"><img src="icon-192.png" width="110" height="110" alt="" style="border-radius:26px">
+<h1 style="margin:18px 0 6px">${c ? 'Crea tu baúl' : 'Desbloquear baúl'}</h1>
+<p class="mu">${c ? 'Elige una contraseña maestra larga. Si la olvidas, no hay forma de recuperar tus datos. Para usar el mismo baúl que en tus otros dispositivos, escribe exactamente la misma.' : 'Escribe tu contraseña maestra.'}</p></div>
+<form data-f="unlock" autocomplete="off"><input id="pw" type="password" placeholder="Contraseña maestra" ${S.busy ? 'disabled' : ''}>
+${c ? '<input id="pw2" type="password" placeholder="Repite la contraseña" style="margin-top:12px">' : ''}
+<div class="err" id="err">${esc(S.err)}</div>
+<button style="width:100%;margin-top:16px" ${S.busy ? 'disabled' : ''}>${S.busy ? 'Abriendo…' : c ? 'Crear baúl' : 'Desbloquear'}</button></form>`; };
+
+const rows = () => {
+  const q = S.q.toLowerCase();
+  const L = S.vault.entries.filter(e => !e.deleted && (!q || e.site.toLowerCase().includes(q) || e.username.toLowerCase().includes(q)))
+    .sort((a, b) => a.site.toLowerCase().localeCompare(b.site.toLowerCase()));
+  return L.length ? `<div class="card">${L.map(e => `<div class="row"><div class="tag" style="background:${col(e.site)}">${esc((e.site.trim()[0] || '?').toUpperCase())}</div>
+<div class="grow" data-a="open" data-id="${e.id}"><b>${esc(e.site)}</b><span class="mu">${esc(e.username)}</span></div>
+<button class="t" data-a="cu" data-id="${e.id}" aria-label="Copiar usuario">👤</button><button class="s" data-a="cp" data-id="${e.id}" aria-label="Copiar contraseña">🔑</button></div>`).join('')}</div>`
+    : `<p class="mu" style="text-align:center;margin-top:40px">${q ? 'No hay resultados.' : 'Aún no hay contraseñas. Pulsa «Añadir».'}</p>`;
+};
+const vList = () => `${S.busy ? '<div class="bar"></div>' : ''}
+<div style="display:flex;align-items:center;margin-bottom:10px"><div class="grow"><h1>Mis contraseñas</h1><div class="mu">${S.vault.entries.filter(e => !e.deleted).length} entradas guardadas</div></div>
+<button class="t" data-a="sync" aria-label="Sincronizar">☁️</button><button class="t" data-a="lock" aria-label="Bloquear">🔒</button></div>
+<div class="mu" style="margin-bottom:12px" data-a="sync">${conn() ? 'Dropbox conectado · <u data-a="disc">Desconectar</u>' : 'Solo en este dispositivo. Toca aquí para conectar Dropbox.'}</div>
+<input id="q" placeholder="Buscar por sitio o usuario" value="${esc(S.q)}"><div id="list" style="margin-top:12px">${rows()}</div>
+<button class="fab" data-a="add">+ Añadir</button>`;
+const vEdit = () => { const e = S.sel ? find(S.sel) : { site: '', username: '', password: '', notes: '' }; return `
+<div style="display:flex;align-items:center;margin-bottom:8px"><button class="t" data-a="back">← Volver</button><div class="grow"></div>${S.sel ? '<button class="t" data-a="del" style="color:var(--er)">Borrar</button>' : ''}</div>
+<h1>${S.sel ? 'Editar entrada' : 'Nueva entrada'}</h1>
+<label>Sitio o app</label><input id="f_site" value="${esc(e.site)}">
+<label>Usuario o correo</label><input id="f_user" value="${esc(e.username)}" autocapitalize="off" autocorrect="off">
+<label>Contraseña</label><div style="display:flex;gap:8px"><input id="f_pw" type="password" value="${esc(e.password)}" autocapitalize="off" autocorrect="off" style="font-family:ui-monospace,Menlo,Consolas,monospace"><button class="s" data-a="eye">Ver</button><button class="s" data-a="gen">Generar</button></div>
+<label>Notas</label><textarea id="f_notes" rows="4">${esc(e.notes)}</textarea>
+<button style="width:100%;margin-top:22px" data-a="save">${S.sel ? 'Guardar cambios' : 'Guardar entrada'}</button>`; };
+const render = () => { $('#app').innerHTML = { unlock: vUnlock, list: vList, edit: vEdit }[S.v](); bump(); };
+
+// ---- Acciones ----
+function lock() { if (S.noLock || !S.pw) return; S.vault = S.pw = null; S.v = 'unlock'; S.sel = null; S.q = ''; render(); }
+async function unlock() {
+  const pw = $('#pw').value, c = !localStorage.pb_vault, fail = m => { S.err = m; $('#err').textContent = m; };
+  if (c) { if (pw.length < 12) return fail('Usa al menos 12 caracteres.'); if (pw !== $('#pw2').value) return fail('Las dos contraseñas no coinciden.'); }
+  S.busy = true; S.err = ''; render();
+  try {
+    if (c) { S.vault = { entries: [] }; await local(S.vault, pw); } else S.vault = await open(localStorage.pb_vault, pw);
+    S.pw = pw; S.v = 'list'; S.busy = false; render(); if (conn()) sync1();
+  } catch (e) { S.busy = false; S.vault = null; S.err = e.bad ? 'La contraseña maestra no es correcta.' : 'No se pudo abrir el baúl: ' + e.message; render(); }
+}
+async function sync1() {
+  if (S.busy || !S.vault) return; S.busy = true; render();
+  try { await sync(S.vault, S.pw); toast('Sincronizado con Dropbox.'); } catch (e) { toast('No se pudo sincronizar: ' + why(e)); }
+  S.busy = false; if (S.v === 'list' && S.vault) render();
+}
+async function persist() {
+  const { vault, pw } = S; S.busy = true; render();
+  try {
+    if (conn()) { try { await sync(vault, pw); } catch (e) { await local(vault, pw); toast('Guardado aquí, pero no se pudo sincronizar: ' + why(e)); } }
+    else await local(vault, pw);
+  } catch (e) { toast('No se pudo guardar: ' + e.message); }
+  S.busy = false; if (S.v === 'list' && S.vault) render();
+}
+async function copy(t, l) {
+  try { await navigator.clipboard.writeText(t); toast(l + ' copiado. Se intentará borrar del portapapeles en 30 s.'); clearTimeout(ct); ct = setTimeout(() => navigator.clipboard.writeText('').catch(() => {}), 3e4); }
+  catch { toast('No se pudo copiar.'); }
+}
+async function connect() {
+  S.noLock = true;
+  const v = b64u(rnd(48)); localStorage.pb_ver = v;
+  const ch = b64u(new Uint8Array(await crypto.subtle.digest('SHA-256', E.encode(v))));
+  const url = 'https://www.dropbox.com/oauth2/authorize?' + new URLSearchParams({ client_id: KEY, response_type: 'code', code_challenge: ch, code_challenge_method: 'S256', token_access_type: 'offline' });
+  const o = document.createElement('div'); o.className = 'ov';
+  o.innerHTML = `<div class="card"><h1 style="font-size:22px">Conectar con Dropbox</h1>
+<p class="mu">1. Abre Dropbox, inicia sesión y pulsa «Permitir».<br>2. Copia el código que te muestra, vuelve aquí y pégalo.</p>
+<a class="btn" href="${esc(url)}" target="_blank" rel="noopener">Abrir Dropbox</a>
+<input id="code" placeholder="Código de Dropbox" style="margin-top:12px" autocapitalize="off" autocorrect="off">
+<div style="display:flex;gap:8px;margin-top:12px"><button class="s" id="x">Cancelar</button><button id="ok" style="flex:1">Conectar</button></div></div>`;
+  document.body.append(o);
+  $('#x').onclick = () => { o.remove(); S.noLock = false; };
+  $('#ok').onclick = async () => {
+    try {
+      const j = await dbTok({ grant_type: 'authorization_code', code: $('#code').value.trim(), code_verifier: localStorage.pb_ver });
+      localStorage.pb_rt = j.refresh_token; o.remove(); S.noLock = false; render(); sync1();
+    } catch (e) { toast(e.message); }
+  };
+}
+const A = {
+  lock, add() { S.sel = null; S.v = 'edit'; render(); }, open(id) { S.sel = id; S.v = 'edit'; render(); }, back() { S.v = 'list'; render(); },
+  eye() { const i = $('#f_pw'); i.type = i.type === 'password' ? 'text' : 'password'; },
+  gen() { const c = 'abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%&*?-_', i = $('#f_pw'); i.value = [...crypto.getRandomValues(new Uint32Array(20))].map(x => c[x % c.length]).join(''); i.type = 'text'; },
+  save() {
+    const site = $('#f_site').value.trim(); if (!site) return toast('Escribe el nombre del sitio o la app.');
+    const d = { site, username: $('#f_user').value.trim(), password: $('#f_pw').value, notes: $('#f_notes').value, modified: Date.now() };
+    if (S.sel) Object.assign(find(S.sel), d); else S.vault.entries.push({ id: hex(rnd(16)), deleted: false, ...d });
+    S.v = 'list'; persist();
+  },
+  del() {
+    if (!confirm('¿Borrar esta entrada? Se eliminará también de tus otros dispositivos al sincronizar.')) return;
+    Object.assign(find(S.sel), { deleted: true, username: '', password: '', notes: '', modified: Date.now() }); S.v = 'list'; persist();
+  },
+  cp(id) { copy(find(id).password, 'Contraseña'); }, cu(id) { copy(find(id).username, 'Usuario'); },
+  sync() { conn() ? sync1() : connect(); },
+  disc() { delete localStorage.pb_rt; tok = null; render(); toast('Dropbox desconectado. Tus datos siguen en este dispositivo.'); }
+};
+document.addEventListener('click', e => { const a = e.target.closest('[data-a]'); if (a) A[a.dataset.a]?.(a.dataset.id); });
+document.addEventListener('submit', e => { e.preventDefault(); if (e.target.dataset.f === 'unlock') unlock(); });
+document.addEventListener('input', e => { if (e.target.id === 'q') { S.q = e.target.value; $('#list').innerHTML = rows(); } });
+['pointerdown', 'keydown'].forEach(n => addEventListener(n, bump, true));
+document.addEventListener('visibilitychange', () => { if (document.hidden) lock(); });
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+render();
+</script>
+</body>
+</html>
